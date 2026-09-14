@@ -2,7 +2,7 @@
 
 import pytest
 
-from aslfs.smoothing import DELETE, NO_HAND, SPACE, LetterDebouncer
+from smoothing import DELETE, NO_HAND, SPACE, LetterDebouncer
 
 
 def feed(deb: LetterDebouncer, label: str, n: int, conf: float = 1.0):

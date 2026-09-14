@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aslfs.features import (
+from features import (
     FEATURE_DIM,
     MIDDLE_MCP,
     WRIST,

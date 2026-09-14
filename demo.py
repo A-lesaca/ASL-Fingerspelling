@@ -14,10 +14,9 @@ import mediapipe as mp
 import numpy as np
 import tensorflow as tf
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from aslfs.detector import HandDetector  
-from aslfs.smoothing import NO_HAND, LetterDebouncer 
+from detector import HandDetector  # noqa: E402
+from smoothing import NO_HAND, LetterDebouncer  # noqa: E402
 
 GREEN, WHITE, AMBER = (80, 220, 100), (255, 255, 255), (60, 190, 255)
 
@@ -73,8 +72,6 @@ def main() -> None:
             cv2.rectangle(frame, (0, h - 90), (w, h), (20, 20, 20), -1)
             cv2.putText(frame, deb.text[-38:] or "...", (12, h - 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.1, WHITE, 2)
-
-
             cand, frac = deb.progress()
             if cand:
                 cv2.rectangle(frame, (12, h - 22),

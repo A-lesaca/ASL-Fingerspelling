@@ -39,7 +39,7 @@ def normalise_landmarks(landmarks: np.ndarray, mirror: bool = False) -> np.ndarr
     theta = (-np.pi / 2.0) - angle
     cos_t, sin_t = np.cos(theta), np.sin(theta)
     rot = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
-    pts[:, :2] = pts[:, :2] @ rot.T.
+    pts[:, :2] = pts[:, :2] @ rot.T
 
     return pts.reshape(-1).astype(np.float32)
 

@@ -10,9 +10,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from aslfs.detector import HandDetector  
+from detector import HandDetector, draw_landmarks
 
 
 def main() -> None:
@@ -50,10 +49,7 @@ def main() -> None:
             hit = det.detect(rgb, frame_is_mirrored=True)
 
             if hit is not None:
-                mp_draw = __import__("mediapipe").solutions
-                mp_draw.drawing_utils.draw_landmarks(
-                    frame, hit.raw, mp_draw.hands.HAND_CONNECTIONS
-                )
+                draw_landmarks(frame, hit.raw)
 
             if recording and remaining > 0:
                 if hit is not None:
