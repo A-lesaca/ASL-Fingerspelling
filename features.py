@@ -54,7 +54,14 @@ def resolve_handedness(mediapipe_label: str, frame_is_mirrored: bool) -> str:
 
 
 def landmarks_to_array(hand_landmarks) -> np.ndarray:
-    """Convert a MediaPipe NormalizedLandmarkList into a plain (21, 3) array."""
-    return np.array(
-        [[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark], dtype=np.float64
-    )
+    """Convert MediaPipe hand landmarks into a plain (21, 3) array.
+
+    The Tasks API hands back a plain list of NormalizedLandmark. The older
+    solutions API wrapped that list in a NormalizedLandmarkList with a
+    ``.landmark`` attribute, so both shapes are accepted here.
+    """
+    points = getattr(hand_landmarks, "landmark", hand_landmarks)
+    arr = np.array([[lm.x, lm.y, lm.z] for lm in points], dtype=np.float64)
+    if arr.shape != (NUM_LANDMARKS, 3):
+        raise ValueError(f"expected {NUM_LANDMARKS} landmarks, got {arr.shape}")
+    return arr

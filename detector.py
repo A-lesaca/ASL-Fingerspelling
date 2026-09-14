@@ -126,7 +126,8 @@ class HandDetector:
         label = result.handedness[0][0].category_name
         hand = resolve_handedness(label, frame_is_mirrored)
 
-        features = normalise_landmarks(landmarks_to_array(raw), mirror=(hand == "Left"))
+        pts = np.array([[lm.x, lm.y, lm.z] for lm in raw], dtype=np.float64)
+        features = normalise_landmarks(pts, mirror=(hand == "Left"))
         return Detection(features=features, handedness=hand, raw=raw)
 
     def close(self) -> None:
