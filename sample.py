@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import string
-import sys
+from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -64,8 +64,8 @@ def main() -> None:
                     burst_sizes.append((recording, args.burst))
                     recording = None
             else:
-                counts = {c: y.count(c) for c in sorted(set(y))}
-                thin = [c for c, n in counts.items() if n < 40]
+                counts = Counter(y)
+                thin = sorted(c for c in valid | {"space", "del"} if counts[c] < 40)
                 msg = f"total {len(X)}"
                 if thin:
                     msg += f" | need more: {' '.join(thin[:8])}"
@@ -74,20 +74,23 @@ def main() -> None:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2,
                 )
 
-            cv2.imshow("collect (letter=record, u=undo, q=quit)", frame)
+            cv2.imshow("collect (letter=record, -=undo, esc=quit)", frame)
             key = cv2.waitKey(1) & 0xFF
 
-            if key == ord("q"):
+            if key == 27:  # esc
                 break
-            if key == ord("u") and burst_sizes:
-                label, n = burst_sizes.pop()
-                del X[-n:], y[-n:]
-                print(f"undid burst of {n} for {label}")
+            if key == ord("-"):  # undo
+                if burst_sizes:
+                    label, n = burst_sizes.pop()
+                    n = min(n, len(X))
+                    del X[-n:]
+                    del y[-n:]
+                    print(f"undid burst of {n} for {label}")
             elif key == 32:  # space bar
                 recording, remaining = "space", args.burst
             elif key in (8, 127):  # backspace
                 recording, remaining = "del", args.burst
-            elif chr(key).upper() in valid if 32 < key < 127 else False:
+            elif 32 < key < 127 and chr(key).upper() in valid:
                 recording, remaining = chr(key).upper(), args.burst
 
     cap.release()

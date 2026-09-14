@@ -46,9 +46,15 @@ class Detection(NamedTuple):
 
 def ensure_model(path: Path = MODEL_FILE) -> Path:
     """Download the hand landmarker model bundle if it isn't here yet (~7MB)."""
-    if not path.exists():
-        print(f"downloading hand landmarker model -> {path}")
-        urllib.request.urlretrieve(MODEL_URL, path)
+    if path.exists() and path.stat().st_size > 0:
+        return path
+    print(f"downloading hand landmarker model -> {path}")
+    tmp = path.with_suffix(path.suffix + ".part")
+    try:
+        urllib.request.urlretrieve(MODEL_URL, tmp)
+        tmp.replace(path)  # only becomes the real file once it's complete
+    finally:
+        tmp.unlink(missing_ok=True)
     return path
 
 

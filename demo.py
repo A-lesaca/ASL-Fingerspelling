@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from collections import deque
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import tensorflow as tf
 
 
-from detector import HandDetector  # noqa: E402
-from smoothing import NO_HAND, LetterDebouncer  # noqa: E402
+from detector import HandDetector, draw_landmarks
+from smoothing import NO_HAND, LetterDebouncer
 
 GREEN, WHITE, AMBER = (80, 220, 100), (255, 255, 255), (60, 190, 255)
 
@@ -44,8 +42,6 @@ def main() -> None:
         raise SystemExit(f"could not open camera {args.camera}")
 
     fps_times: deque[float] = deque(maxlen=30)
-    drawing = mp.solutions.drawing_utils
-    connections = mp.solutions.hands.HAND_CONNECTIONS
 
     with HandDetector() as det:
         while True:
@@ -62,11 +58,13 @@ def main() -> None:
                 deb.update(NO_HAND, 0.0)
                 label, conf = "-", 0.0
             else:
-                probs = model.predict(hit.features[None, :], verbose=0)[0]
+                # model(...) rather than .predict(...): predict() rebuilds a
+                # batch loop on every call, which costs ~10ms per frame here.
+                probs = np.asarray(model(hit.features[None, :], training=False))[0]
                 k = int(probs.argmax())
                 label, conf = classes[k], float(probs[k])
                 deb.update(label, conf)
-                drawing.draw_landmarks(frame, hit.raw, connections)
+                draw_landmarks(frame, hit.raw)
 
             h, w = frame.shape[:2]
             cv2.rectangle(frame, (0, h - 90), (w, h), (20, 20, 20), -1)
