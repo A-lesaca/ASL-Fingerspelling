@@ -1,4 +1,16 @@
-"""Train the classifier and report both accuracy numbers."""
+"""Train the ASL letter classifier on a landmark feature set.
+
+Consumes the .npz written by convert.py or sample.py and writes:
+
+    models/model.joblib   a fitted scikit-learn classifier
+    models/classes.json   the label order, for inspection
+
+Note that the label order is read back from the fitted estimator's
+``classes_`` attribute at inference time, not from classes.json. Deriving it
+from the model itself makes it impossible for the two to drift apart -- a
+stale classes.json would otherwise produce confident, wrong letters with no
+error anywhere.
+"""
 
 from __future__ import annotations
 
@@ -6,135 +18,127 @@ import argparse
 import json
 from pathlib import Path
 
+import joblib
 import numpy as np
-import tensorflow as tf
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
-SEED = 42
-
-
-def build_model(input_dim: int, n_classes: int) -> tf.keras.Model:
-    model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(input_dim,)),
-            tf.keras.layers.Dense(256, activation="relu"),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.3),
-            tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.3),
-            tf.keras.layers.Dense(n_classes, activation="softmax"),
-        ]
-    )
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(1e-3),
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"],
-    )
-    return model
+from features import VECTOR_DIM
 
 
-def jitter(X: np.ndarray, y: np.ndarray, factor: int, sigma: float, rng) -> tuple:
-    """Augment with small Gaussian noise on the landmarks.
+def load_dataset(paths: list[Path]) -> tuple[np.ndarray, np.ndarray]:
+    """Load and concatenate one or more .npz feature files."""
+    Xs, ys = [], []
+    for p in paths:
+        if not p.exists():
+            raise SystemExit(f"dataset not found: {p}")
+        d = np.load(p, allow_pickle=True)
+        Xs.append(d["X"].astype(np.float32))
+        ys.append(d["y"].astype(str))
+        print(f"{p}: {len(d['X'])} samples")
 
-    Translation, scale and rotation are already normalised away, so the only
-    variation left to simulate is landmark jitter -- MediaPipe placing a joint
-    a pixel or two off. Keep sigma small; large noise makes similar letters
-    (M/N/S/T) collide and actively hurts.
-    """
-    if factor <= 1:
-        return X, y
-    noisy = [X] + [X + rng.normal(0, sigma, X.shape).astype(np.float32)
-                   for _ in range(factor - 1)]
-    return np.concatenate(noisy), np.tile(y, factor)
+    X = np.concatenate(Xs)
+    y = np.concatenate(ys)
+    if X.ndim != 2 or X.shape[1] != VECTOR_DIM:
+        raise SystemExit(
+            f"expected (N, {VECTOR_DIM}) features, got {X.shape}. "
+            "Datasets built before the feature change need rebuilding."
+        )
+    return X, y
+
+
+def build_estimator(kind: str, seed: int):
+    """Construct one of three classifiers over the same feature vector."""
+    if kind == "forest":
+        # The reference project's choice. Handles unscaled, mixed-unit features
+        # (coordinates, radians, ratios) without any preprocessing, because
+        # trees split on thresholds rather than on distances.
+        return RandomForestClassifier(
+            n_estimators=400,
+            min_samples_leaf=1,
+            class_weight="balanced",
+            n_jobs=-1,
+            random_state=seed,
+        )
+    if kind == "svm":
+        # Distance-based, so it does need scaling. Often the stronger model on
+        # small landmark datasets, at the cost of slower prediction.
+        return make_pipeline(
+            StandardScaler(),
+            SVC(C=10.0, gamma="scale", probability=True,
+                class_weight="balanced", random_state=seed),
+        )
+    if kind == "mlp":
+        return make_pipeline(
+            StandardScaler(),
+            MLPClassifier(hidden_layer_sizes=(256, 128), max_iter=1000,
+                          early_stopping=True, random_state=seed),
+        )
+    raise SystemExit(f"unknown classifier: {kind}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--train", type=Path, required=True)
-    ap.add_argument("--holdout", type=Path, default=None,
-                    help="your own recorded samples -- the honest test set")
-    ap.add_argument("--outdir", type=Path, default=Path("models"))
-    ap.add_argument("--epochs", type=int, default=120)
-    ap.add_argument("--augment", type=int, default=3)
-    ap.add_argument("--noise", type=float, default=0.01)
+    ap.add_argument("--data", type=Path, nargs="+", required=True,
+                    help="one or more .npz files from convert.py / sample.py")
+    ap.add_argument("--models", type=Path, default=Path("models"))
+    ap.add_argument("--classifier", choices=["forest", "svm", "mlp"],
+                    default="forest")
+    ap.add_argument("--test-size", type=float, default=0.2)
+    ap.add_argument("--cross-validate", action="store_true",
+                    help="also run 5-fold CV on the full set (slower)")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    rng = np.random.default_rng(SEED)
-    tf.keras.utils.set_random_seed(SEED)
+    X, y = load_dataset(args.data)
 
-    d = np.load(args.train, allow_pickle=True)
-    X, y_raw = d["X"].astype(np.float32), d["y"]
+    labels, counts = np.unique(y, return_counts=True)
+    print(f"\n{len(X)} samples, {len(labels)} classes, {X.shape[1]} features")
+    thin = [(l, int(n)) for l, n in zip(labels, counts) if n < 40]
+    if thin:
+        print("under-represented: " + ", ".join(f"{l}={n}" for l, n in thin))
+    if counts.min() < 2:
+        raise SystemExit("every class needs at least 2 samples to stratify")
 
-    classes = sorted(set(y_raw.tolist()))
-    index = {c: i for i, c in enumerate(classes)}
-    y = np.array([index[c] for c in y_raw])
-    print(f"{len(X)} samples, {len(classes)} classes: {' '.join(classes)}")
-
-    X_tr, X_val, y_tr, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=SEED, stratify=y
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        X, y, test_size=args.test_size, shuffle=True,
+        stratify=y, random_state=args.seed,
     )
-    X_tr, y_tr = jitter(X_tr, y_tr, args.augment, args.noise, rng)
+    print(f"train {len(X_tr)}, test {len(X_te)}")
 
-    model = build_model(X.shape[1], len(classes))
-    model.fit(
-        X_tr, y_tr,
-        validation_data=(X_val, y_val),
-        epochs=args.epochs,
-        batch_size=128,
-        callbacks=[
-            tf.keras.callbacks.EarlyStopping(
-                monitor="val_accuracy", patience=15, restore_best_weights=True
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss", factor=0.5, patience=6, min_lr=1e-5
-            ),
-        ],
-        verbose=2,
-    )
+    model = build_estimator(args.classifier, args.seed)
+    print(f"\nfitting {args.classifier}...")
+    model.fit(X_tr, y_tr)
 
-    in_dist = model.evaluate(X_val, y_val, verbose=0)[1]
-    print(f"\n  in-distribution accuracy (public split) : {in_dist:.4f}")
+    y_pred = model.predict(X_te)
+    accuracy = float((y_pred == y_te).mean())
+    print(f"\nheld-out accuracy: {accuracy:.1%}\n")
+    print(classification_report(y_te, y_pred, zero_division=0))
 
-    honest = None
-    if args.holdout and args.holdout.exists():
-        h = np.load(args.holdout, allow_pickle=True)
-        keep = np.isin(h["y"], classes)
-        Xh = h["X"].astype(np.float32)[keep]
-        yh = np.array([index[c] for c in h["y"][keep]])
+    if args.cross_validate:
+        scores = cross_val_score(model, X, y, cv=5, n_jobs=-1)
+        print(f"5-fold CV: {scores.mean():.1%} +/- {scores.std():.1%}")
 
-        honest = model.evaluate(Xh, yh, verbose=0)[1]
-        print(f"  held-out accuracy (my own webcam)      : {honest:.4f}")
-        print(f"  generalisation gap                     : {in_dist - honest:.4f}\n")
+    # Overall accuracy hides the pairs that actually break transcription.
+    cm = confusion_matrix(y_te, y_pred, labels=labels)
+    np.fill_diagonal(cm, 0)
+    pairs = [(labels[i], labels[j], int(cm[i, j]))
+             for i, j in zip(*np.nonzero(cm))]
+    if pairs:
+        print("top confusions (true -> predicted):")
+        for t, p, n in sorted(pairs, key=lambda r: -r[2])[:8]:
+            print(f"  {t} -> {p}: {n}")
 
-        pred = model.predict(Xh, verbose=0).argmax(axis=1)
-        print(classification_report(yh, pred, target_names=classes, zero_division=0))
-
-        cm = confusion_matrix(yh, pred, labels=range(len(classes)))
-        pairs = [
-            (cm[i, j], classes[i], classes[j])
-            for i in range(len(classes)) for j in range(len(classes)) if i != j
-        ]
-        print("most confused pairs:")
-        for n, a, b in sorted(pairs, reverse=True)[:6]:
-            if n:
-                print(f"  {a} mistaken for {b}: {n}")
-    else:
-        print("  no held-out set given -- the number above is NOT a real"
-              " generalisation estimate.\n")
-
-    args.outdir.mkdir(parents=True, exist_ok=True)
-    model.save(args.outdir / "model.keras")
-    (args.outdir / "classes.json").write_text(json.dumps(classes))
-    (args.outdir / "metrics.json").write_text(
-        json.dumps({"in_distribution": float(in_dist),
-                    "held_out": float(honest) if honest is not None else None},
-                   indent=2)
-    )
-    print(f"saved -> {args.outdir}")
-    print("\nfor the browser demo:  tensorflowjs_converter --input_format=keras "
-          f"{args.outdir / 'model.keras'} web/model")
+    args.models.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, args.models / "model.joblib")
+    (args.models / "classes.json").write_text(json.dumps(sorted(labels.tolist())))
+    print(f"\nwrote {args.models / 'model.joblib'} and "
+          f"{args.models / 'classes.json'} ({len(labels)} classes)")
 
 
 if __name__ == "__main__":

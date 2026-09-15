@@ -24,7 +24,7 @@ import numpy as np
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision
 
-from features import landmarks_to_array, normalise_landmarks, resolve_handedness
+from features import build_features, landmarks_to_array, resolve_handedness
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -39,7 +39,7 @@ CONNECTIONS = [
 
 
 class Detection(NamedTuple):
-    features: np.ndarray  # (63,) normalised, canonicalised to a right hand
+    features: np.ndarray  # (VECTOR_DIM,) geometric features, right-hand canonical
     handedness: str  # the user's true hand: "Left" or "Right"
     raw: list  # the 21 NormalizedLandmarks, kept for drawing
 
@@ -102,19 +102,32 @@ class HandDetector:
         self._timestamp = 0
 
     def detect(
-        self, rgb_frame: np.ndarray, frame_is_mirrored: bool
+        self,
+        rgb_frame: np.ndarray,
+        frame_is_mirrored: bool,
+        timestamp_ms: Optional[int] = None,
     ) -> Optional[Detection]:
-        """Detect one hand and return its normalised features, or None.
+        """Detect one hand and return its feature vector, or None.
 
         Args:
             rgb_frame: HxWx3 RGB image (OpenCV gives BGR -- convert first).
             frame_is_mirrored: True if the frame was flipped for selfie view.
+            timestamp_ms: presentation time of this frame. Pass the real value
+                when reading a file -- MediaPipe's tracker uses the gap between
+                timestamps to decide how far the hand may plausibly have moved,
+                so feeding a fake 30fps clock while decoding a 60fps or 24fps
+                video degrades tracking. Defaults to a synthetic 30fps clock,
+                which is right for a live webcam.
         """
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
         if self._mode == vision.RunningMode.VIDEO:
             # VIDEO mode requires strictly increasing timestamps.
-            self._timestamp += 33  # ~30fps, in milliseconds
+            if timestamp_ms is None:
+                self._timestamp += 33  # ~30fps, in milliseconds
+            else:
+                # Strictly increasing is a hard requirement of the VIDEO API.
+                self._timestamp = max(int(timestamp_ms), self._timestamp + 1)
             result = self._landmarker.detect_for_video(image, self._timestamp)
         else:
             result = self._landmarker.detect(image)
@@ -126,8 +139,7 @@ class HandDetector:
         label = result.handedness[0][0].category_name
         hand = resolve_handedness(label, frame_is_mirrored)
 
-        pts = np.array([[lm.x, lm.y, lm.z] for lm in raw], dtype=np.float64)
-        features = normalise_landmarks(pts, mirror=(hand == "Left"))
+        features = build_features(landmarks_to_array(raw), mirror=(hand == "Left"))
         return Detection(features=features, handedness=hand, raw=raw)
 
     def close(self) -> None:
