@@ -1,4 +1,14 @@
-"""Transcribe ASL fingerspelling from a pre-recorded video file."""
+"""Transcribe ASL fingerspelling from a pre-recorded video file.
+
+Reads an MP4 (or any format OpenCV can decode), runs MediaPipe hand detection
+on every frame, classifies each frame's hand shape, smooths the per-frame
+predictions with a sliding-window majority vote, and prints the resulting text.
+
+    python transcribe.py --video clips/hello.mp4
+
+Letters J and Z are excluded by design: both are drawn with motion, and a
+single-frame classifier has no way to represent a trajectory.
+"""
 
 from __future__ import annotations
 

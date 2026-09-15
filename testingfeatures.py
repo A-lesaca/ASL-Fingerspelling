@@ -120,3 +120,65 @@ class TestResolveHandedness:
     def test_rejects_junk(self):
         with pytest.raises(ValueError):
             resolve_handedness("left", frame_is_mirrored=True)
+
+class TestGeometricFeatures:
+    """The coordinates/distances/angles/ratios vector built on top of them."""
+
+    def test_vector_has_the_advertised_width(self):
+        from features import (N_ANGLES, N_COORDS, N_DISTANCES, N_RATIOS,
+                              VECTOR_DIM, build_features)
+        out = build_features(fake_hand())
+        assert out.shape == (VECTOR_DIM,)
+        assert N_COORDS + N_DISTANCES + N_ANGLES + N_RATIOS == VECTOR_DIM
+        assert out.dtype == np.float32
+
+    def test_first_block_is_the_normalised_coordinates(self):
+        from features import N_COORDS, build_features
+        hand = fake_hand()
+        assert np.allclose(
+            build_features(hand)[:N_COORDS], normalise_landmarks(hand), atol=1e-6
+        )
+
+    @pytest.mark.parametrize("degrees", [30, 90, -120])
+    def test_inherits_rotation_invariance(self, degrees):
+        from features import build_features
+        hand = fake_hand()
+        turned = rotate_xy(hand, np.deg2rad(degrees), about=hand[WRIST, :2])
+        assert np.allclose(build_features(hand), build_features(turned), atol=1e-4)
+
+    def test_inherits_scale_invariance(self):
+        from features import build_features
+        hand = fake_hand()
+        bigger = (hand - hand[WRIST]) * 3.0 + hand[WRIST]
+        assert np.allclose(build_features(hand), build_features(bigger), atol=1e-4)
+
+    def test_extension_ratio_separates_straight_from_curled(self):
+        """A straight finger scores near 1.0; a curled one scores well below."""
+        from features import N_ANGLES, N_RATIOS, build_features
+
+        straight = np.zeros((21, 3))
+        straight[9] = [0.0, -1.0, 0.0]          # palm bone, sets the scale
+        for i, lm in enumerate((5, 6, 7, 8)):   # index finger, fully extended
+            straight[lm] = [0.3, -0.4 * (i + 1), 0.0]
+
+        curled = straight.copy()
+        curled[7] = [0.3, -0.9, 0.0]            # fold the last two joints back
+        curled[8] = [0.3, -0.5, 0.0]
+
+        ratios = slice(-N_RATIOS, None)
+        index_ratio = 1  # thumb, index, middle, ring, pinky
+        s = build_features(straight)[ratios][index_ratio]
+        c = build_features(curled)[ratios][index_ratio]
+        assert s > 0.95, f"extended finger should score near 1.0, got {s}"
+        assert c < s, f"curled finger should score lower than extended ({c} vs {s})"
+
+    def test_angles_are_radians_in_range(self):
+        from features import N_ANGLES, N_RATIOS, build_features
+        angles = build_features(fake_hand())[-(N_ANGLES + N_RATIOS):-N_RATIOS]
+        assert angles.shape == (N_ANGLES,)
+        assert np.all(angles >= 0.0) and np.all(angles <= np.pi + 1e-6)
+
+    def test_degenerate_hand_is_finite(self):
+        from features import build_features
+        out = build_features(np.full((21, 3), 0.5))
+        assert np.all(np.isfinite(out))

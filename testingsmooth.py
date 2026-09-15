@@ -119,3 +119,62 @@ def test_reset_clears_everything(deb):
     assert deb.text == ""
     assert deb.latched is None
     assert deb.progress() == (None, 0.0)
+
+class TestReleaseDoesNotDoubleType:
+    """Regression: a short release must not re-commit from stale frames.
+
+    When the latch is released, the window can still be full of the sign the
+    hand just left. Before the fix those frames immediately won the vote
+    again, so signing G, dropping the hand and signing O produced 'GGOO'.
+    """
+
+    @pytest.mark.parametrize("release_votes", [3, 4, 5, 8])
+    def test_alternating_letters_type_once_each(self, release_votes):
+        d = LetterDebouncer(window=10, min_votes=5, min_confidence=0.5,
+                            release_votes=release_votes)
+        for _ in range(3):
+            feed(d, "G", 12)
+            feed(d, NO_HAND, 8)
+            feed(d, "O", 12)
+            feed(d, NO_HAND, 8)
+        assert d.text == "GOGOGO"
+
+    def test_short_gap_between_letters_still_types_once(self):
+        d = LetterDebouncer(window=10, min_votes=5, min_confidence=0.5,
+                            release_votes=3)
+        feed(d, "A", 10)
+        feed(d, NO_HAND, 4)   # barely enough to release
+        feed(d, "B", 10)
+        assert d.text == "AB"
+
+    def test_deliberate_double_letter_still_works(self):
+        """The fix must not break repeating a letter on purpose."""
+        d = LetterDebouncer(window=10, min_votes=5, min_confidence=0.5,
+                            release_votes=4)
+        feed(d, "L", 12)
+        feed(d, NO_HAND, 12)
+        feed(d, "L", 12)
+        assert d.text == "LL"
+
+
+class TestButtonInsert:
+    def test_insert_types_immediately(self, deb):
+        deb.insert(SPACE)
+        deb.insert("X")
+        assert deb.text == " X"
+
+    def test_insert_does_not_block_the_next_sign(self, deb):
+        feed(deb, "A", 10)
+        deb.insert(SPACE)
+        feed(deb, "A", 10)
+        assert deb.text == "A A"
+
+    def test_configure_keeps_typed_text(self, deb):
+        feed(deb, "A", 10)
+        deb.configure(window=20, min_votes=15, min_confidence=0.5)
+        assert deb.text == "A"
+        assert deb.window == 20 and deb.min_votes == 15
+
+    def test_configure_rejects_impossible_settings(self, deb):
+        with pytest.raises(ValueError):
+            deb.configure(window=5, min_votes=9, min_confidence=0.5)
