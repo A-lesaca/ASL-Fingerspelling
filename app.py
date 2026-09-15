@@ -17,6 +17,8 @@ Serving frames to a browser avoids the native GUI entirely.
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import string
 import threading
 import time
@@ -26,9 +28,11 @@ from pathlib import Path
 import cv2
 import joblib
 import numpy as np
-from flask import Flask, Response, jsonify, render_template, request
+from flask import (Flask, Response, jsonify, render_template, request,
+                   send_file)
 
 from detector import HandDetector, draw_landmarks
+from handshapes import describe
 from smoothing import DELETE, NO_HAND, SPACE, LetterDebouncer
 from training import (RECOMMENDED_PER_CLASS, counts, load_samples,
                       save_samples, train_model)
@@ -37,7 +41,14 @@ from training import (RECOMMENDED_PER_CLASS, counts, load_samples,
 # represent, so they are left out of the alphabet everywhere.
 MOTION_LETTERS = {"J", "Z"}
 ALPHABET = [c for c in string.ascii_uppercase if c not in MOTION_LETTERS]
-TEACHABLE = ALPHABET + [SPACE, DELETE]
+BUILT_IN = ALPHABET + [SPACE, DELETE]
+
+# Custom gestures are ordinary labels: the classifier has no idea whether a
+# label is a letter or a word, so a whole-word sign trains exactly like "A".
+# The one real limit is motion -- a sign defined by movement (YES, THANK YOU
+# as actually signed) cannot be told apart from its own still frames, which is
+# the same reason J and Z are left out.
+GESTURE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
 
 app = Flask(__name__)
 
@@ -81,6 +92,10 @@ class Engine:
         self.training = False
         self.last_result: dict | None = None
 
+        self.gestures_path = data.with_name("gestures.json")
+        self.thumb_dir = data.with_name("thumbs")
+        self.gestures: list[str] = self._load_gestures()
+
         X, y = load_samples(self.data_path)
         self.X: list[np.ndarray] = list(X)
         self.y: list[str] = list(y)
@@ -88,6 +103,92 @@ class Engine:
         self.model = None
         self.classes: list[str] = []
         self._load_model()
+
+    @staticmethod
+    def thumb_name(label: str) -> str:
+        """A filename-safe stem. Gesture names may contain spaces and quotes."""
+        return "".join(ch if ch.isalnum() else "_" for ch in label) or "_"
+
+    def thumb_path(self, label: str) -> Path:
+        return self.thumb_dir / f"{self.thumb_name(label)}.jpg"
+
+    def _save_thumb(self, frame: np.ndarray, raw: list, label: str) -> None:
+        """Crop the hand out of one frame and keep it as the label's picture.
+
+        Taken from the user's own recording rather than shipped as artwork:
+        it is guaranteed to match the pose the model was actually trained on,
+        which a generic alphabet chart cannot promise.
+        """
+        h, w = frame.shape[:2]
+        xs = [lm.x * w for lm in raw]
+        ys = [lm.y * h for lm in raw]
+        if not xs or not ys:
+            return
+        pad = 0.35 * max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+        x0, x1 = int(max(min(xs) - pad, 0)), int(min(max(xs) + pad, w))
+        y0, y1 = int(max(min(ys) - pad, 0)), int(min(max(ys) + pad, h))
+        if x1 - x0 < 10 or y1 - y0 < 10:
+            return
+        crop = frame[y0:y1, x0:x1]
+        side = max(crop.shape[:2])
+        square = np.full((side, side, 3), 24, np.uint8)
+        oy, ox = (side - crop.shape[0]) // 2, (side - crop.shape[1]) // 2
+        square[oy:oy + crop.shape[0], ox:ox + crop.shape[1]] = crop
+        self.thumb_dir.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(self.thumb_path(label)),
+                    cv2.resize(square, (128, 128), interpolation=cv2.INTER_AREA),
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+
+    def _load_gestures(self) -> list[str]:
+        if not self.gestures_path.exists():
+            return []
+        try:
+            raw = json.loads(self.gestures_path.read_text())
+            return [str(g) for g in raw if isinstance(g, str)]
+        except (ValueError, OSError):
+            return []   # a corrupt list should not stop the app starting
+
+    def _save_gestures(self) -> None:
+        self.gestures_path.parent.mkdir(parents=True, exist_ok=True)
+        self.gestures_path.write_text(json.dumps(self.gestures))
+
+    @property
+    def teachable(self) -> list[str]:
+        return BUILT_IN + self.gestures
+
+    def add_gesture(self, name: str) -> str:
+        name = " ".join(name.split()).upper()
+        if not name:
+            raise ValueError("Give the gesture a name.")
+        if not GESTURE_PATTERN.match(name):
+            raise ValueError(
+                "Use letters, digits, spaces, apostrophes or hyphens (max 24)."
+            )
+        if len(name) == 1:
+            raise ValueError("Single letters are already covered by the alphabet.")
+        if name in self.teachable:
+            raise ValueError(f"{name} already exists.")
+        with self._lock:
+            self.gestures.append(name)
+            self._save_gestures()
+        return name
+
+    def remove_gesture(self, name: str) -> None:
+        with self._lock:
+            if name not in self.gestures:
+                raise ValueError(f"No gesture called {name}.")
+            self.gestures.remove(name)
+            # Drop its samples too, or training would still see the label.
+            keep = [i for i, label in enumerate(self.y) if label != name]
+            self.X = [self.X[i] for i in keep]
+            self.y = [self.y[i] for i in keep]
+            self._bursts = [b for b in self._bursts if b[0] != name]
+            self.thumb_path(name).unlink(missing_ok=True)
+            self._save_gestures()
+            if self.X:
+                save_samples(self.data_path, np.stack(self.X), self.y)
+            elif self.data_path.exists():
+                self.data_path.unlink()
 
     def _load_model(self) -> None:
         path = self.models_dir / "model.joblib"
@@ -159,7 +260,13 @@ class Engine:
                     if hit is not None:
                         draw_landmarks(frame, hit.raw)
                         if self.recording is not None:
+                            label = self.recording
+                            first = self.remaining == self._burst_size
                             self._capture(hit.features)
+                            if first:
+                                # Use the un-annotated frame: the overlay bands
+                                # are drawn later, so the crop stays clean.
+                                self._save_thumb(frame, hit.raw, label)
                         elif self.model is not None:
                             probs = self.model.predict_proba(hit.features[None, :])[0]
                             k = int(probs.argmax())
@@ -223,6 +330,10 @@ class Engine:
             cv2.rectangle(frame, (0, 0), (w, 46), (20, 120, 190), -1)
             cv2.putText(frame, f"Get ready: {self.pending}   {left:.0f}",
                         (14, 32), font, 0.9, (255, 255, 255), 2)
+            guide = describe(self.pending)
+            cv2.rectangle(frame, (0, 46), (w, 74), (20, 90, 140), -1)
+            cv2.putText(frame, guide[:70], (14, 65), font, 0.5,
+                        (235, 240, 245), 1)
         elif self.recording is not None:
             cv2.rectangle(frame, (0, 0), (w, 46), (30, 30, 170), -1)
             cv2.putText(frame, f"REC {self.recording}  {self.remaining} left",
@@ -272,7 +383,7 @@ class Engine:
     def record(self, label: str, frames: int) -> None:
         if not self.running:
             raise ValueError("Start the camera before recording.")
-        if label not in TEACHABLE:
+        if label not in self.teachable:
             raise ValueError(f"{label!r} is not a letter this model can learn.")
         with self._lock:
             self._burst_size = frames
@@ -349,7 +460,11 @@ class Engine:
                 "training": self.training,
                 "can_undo": bool(self._bursts),
                 "total_samples": len(self.X),
-                "counts": {c: per_label.get(c, 0) for c in TEACHABLE},
+                "counts": {c: per_label.get(c, 0) for c in self.teachable},
+                "gestures": list(self.gestures),
+                "thumbs": [c for c in self.teachable
+                           if self.thumb_path(c).exists()],
+                "hints": {c: describe(c) for c in self.teachable},
                 "recommended": RECOMMENDED_PER_CLASS,
                 "result": self.last_result,
             }
@@ -360,13 +475,21 @@ engine: Engine | None = None
 
 @app.route("/")
 def index():
-    return render_template("index.html", teachable=TEACHABLE)
+    return render_template("index.html")
 
 
 @app.route("/video")
 def video():
     return Response(engine.frames_stream(),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/thumb/<path:label>")
+def thumb(label: str):
+    path = engine.thumb_path(label)
+    if not path.exists():
+        return ("", 404)
+    return send_file(path, mimetype="image/jpeg")
 
 
 @app.route("/api/state")
@@ -404,6 +527,26 @@ def record():
     try:
         frames = max(5, min(int(body.get("frames", 30)), 200))
         engine.record(str(body.get("letter", "")), frames)
+    except (TypeError, ValueError) as exc:
+        return _bad(exc)
+    return _ok()
+
+
+@app.route("/api/gesture", methods=["POST"])
+def gesture():
+    body = request.get_json(silent=True) or {}
+    try:
+        engine.add_gesture(str(body.get("name", "")))
+    except (TypeError, ValueError) as exc:
+        return _bad(exc)
+    return _ok()
+
+
+@app.route("/api/gesture/remove", methods=["POST"])
+def gesture_remove():
+    body = request.get_json(silent=True) or {}
+    try:
+        engine.remove_gesture(str(body.get("name", "")))
     except (TypeError, ValueError) as exc:
         return _bad(exc)
     return _ok()

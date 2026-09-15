@@ -35,13 +35,24 @@
   .keys { font-size:13px; color:var(--muted); margin-top:12px; line-height:1.9; }
   .keys b { font-weight:500; color:var(--ink); }
   .letters { display:grid; grid-template-columns:repeat(13, 1fr); gap:5px; margin-top:8px; }
-  .letters button { padding:6px 0; font-size:13px; text-align:center; }
+  .letters button { padding:6px 2px; font-size:13px; text-align:center;
+                    display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .letters .thumb { width:100%; max-width:52px; aspect-ratio:1; object-fit:cover;
+                    border-radius:2px; display:block; background:#191817; }
+  .letters .lbl { line-height:1.1; }
   .letters button.wide { grid-column:span 2; }
   .letters button .n { display:block; font-size:10px; color:var(--muted);
                        font-variant-numeric:tabular-nums; }
   .letters button.ready { background:#dfe7d8; border-color:#a8ba9c; }
   .letters button.ready .n { color:var(--green); }
   @media (max-width:640px) { .letters { grid-template-columns:repeat(7,1fr); } }
+  .gesture-add { display:flex; gap:8px; margin:8px 0; }
+  .gesture-add input { flex:1; font:inherit; padding:7px 10px; border-radius:3px;
+                       border:1px solid #c9c3b2; background:#fff; color:var(--ink); }
+  .gesture-add input:focus-visible { outline:2px solid var(--green); outline-offset:1px; }
+  #gestures button { position:relative; }
+  #gestures .x { position:absolute; top:1px; right:5px; font-size:13px;
+                 color:var(--muted); line-height:1; }
   .banner { display:none; margin-bottom:14px; padding:9px 13px; border-radius:3px;
             font-size:14px; background:#f6e3da; border:1px solid #d9b3a2; color:var(--warn); }
 </style>
@@ -79,6 +90,17 @@
       you have three seconds before it starts recording.
     </p>
     <div class="letters" id="letters"></div>
+
+    <h2 style="margin-top:18px">Whole-word gestures</h2>
+    <p class="keys" style="margin-top:0">
+      Teach a sign that types a whole word. It trains exactly like a letter,
+      so it has to be a still pose — signs defined by movement won't work.
+    </p>
+    <div class="gesture-add">
+      <input id="gestureName" type="text" maxlength="24" placeholder="e.g. HELLO">
+      <button id="addGesture">Add gesture</button>
+    </div>
+    <div class="letters" id="gestures" style="grid-template-columns:repeat(4,1fr)"></div>
   </div>
 </main>
 
@@ -100,7 +122,8 @@ function showError(m) {
 function render(s) {
   if (!s) return;
   $("transcript").textContent = s.text || "";
-  const busyNote = s.pending ? `Get ready: ${s.pending} — ${s.countdown.toFixed(0)}s`
+  const busyNote = s.pending
+      ? `Get ready: ${s.pending} — ${s.countdown.toFixed(0)}s · ${s.hints[s.pending] || ""}`
                  : s.recording ? `Recording ${s.recording} — ${s.remaining} frames left`
                  : s.training ? "Training…" : "";
   $("busy").textContent = busyNote;
@@ -110,20 +133,9 @@ function render(s) {
   $("trainBtn").textContent = s.training ? "Training…" : "Train model";
   showError(s.error);
 
-  if (!$("letters").children.length) {
-    $("letters").innerHTML = Object.keys(s.counts).map(k =>
-      `<button data-letter="${k}" class="${k.length > 1 ? "wide" : ""}">${k}<span class="n">0</span></button>`
-    ).join("");
-    $("letters").querySelectorAll("button").forEach(b =>
-      b.onclick = () => post("/api/record", {letter: b.dataset.letter}));
-  }
-  const busy = !!(s.recording || s.pending || s.training);
-  $("letters").querySelectorAll("button").forEach(b => {
-    const n = s.counts[b.dataset.letter] || 0;
-    b.querySelector(".n").textContent = n;
-    b.classList.toggle("ready", n >= s.recommended);
-    b.disabled = busy || !s.running;
-  });
+  const builtIn = Object.keys(s.counts).filter(k => !s.gestures.includes(k));
+  paint($("letters"), builtIn, s, false);
+  paint($("gestures"), s.gestures, s, true);
 
   if (s.result && s.result !== lastResult) {
     lastResult = s.result;
@@ -143,6 +155,53 @@ function render(s) {
     $("placeholder").textContent = "Camera stopped.";
   }
 }
+
+function paint(host, labels, s, removable) {
+  const signature = labels.join("|");
+  if (host.dataset.signature !== signature) {
+    host.dataset.signature = signature;
+    host.innerHTML = labels.map(k =>
+      `<button data-letter="${k}" class="${!removable && k.length > 1 ? "wide" : ""}"` +
+      ` title="${(s.hints[k] || "").replace(/"/g, "&quot;")}">` +
+      (removable ? `<span class="x" title="Remove">×</span>` : "") +
+      `<img class="thumb" alt="" hidden>` +
+      `<span class="lbl">${k}</span><span class="n">0</span></button>`).join("");
+    host.querySelectorAll("button").forEach(b => b.onclick = (e) => {
+      if (e.target.classList.contains("x")) {
+        return post("/api/gesture/remove", {name: b.dataset.letter});
+      }
+      post("/api/record", {letter: b.dataset.letter});
+    });
+  }
+  const busy = !!(s.recording || s.pending || s.training);
+  host.querySelectorAll("button").forEach(b => {
+    const k = b.dataset.letter, n = s.counts[k] || 0;
+    b.querySelector(".n").textContent = n;
+    b.classList.toggle("ready", n >= s.recommended);
+    b.disabled = busy || !s.running;
+    const img = b.querySelector(".thumb");
+    const want = s.thumbs.includes(k);
+    // Re-fetch only when the count changes, or the browser caches the old crop.
+    if (want && img.dataset.n !== String(n)) {
+      img.dataset.n = String(n);
+      img.src = `/thumb/${encodeURIComponent(k)}?v=${n}`;
+      img.hidden = false;
+    } else if (!want && !img.hidden) {
+      img.hidden = true; img.removeAttribute("src"); delete img.dataset.n;
+    }
+  });
+}
+
+$("addGesture").onclick = async () => {
+  const name = $("gestureName").value.trim();
+  if (!name) return;
+  await post("/api/gesture", {name});
+  $("gestureName").value = "";
+};
+$("gestureName").addEventListener("keydown", (e) => {
+  e.stopPropagation();                    // typing here must not record letters
+  if (e.key === "Enter") { e.preventDefault(); $("addGesture").click(); }
+});
 
 $("spaceBtn").onclick = () => post("/api/space");
 $("backBtn").onclick  = () => post("/api/backspace");
