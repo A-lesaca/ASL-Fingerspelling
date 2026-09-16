@@ -63,7 +63,7 @@ practice history:
 python reset.py            # asks for confirmation
 python reset.py --yes      # skip confirmation
 python reset.py --keep-history
-python reset.py --port     # also frees port 5000, in case the app is stuck running
+python reset.py --port     # frees port 5000
 ```
 
 ## Project structure
