@@ -33,6 +33,7 @@ from flask import (Flask, Response, jsonify, render_template, request,
 
 from detector import HandDetector, draw_landmarks
 from handshapes import describe
+from practice import PracticeSession
 from smoothing import DELETE, NO_HAND, SPACE, LetterDebouncer
 from training import (RECOMMENDED_PER_CLASS, counts, load_samples,
                       save_samples, train_model)
@@ -88,6 +89,11 @@ class Engine:
         self.countdown = 3.0
         self._bursts: list[tuple[str, int]] = []
 
+        # Practice state.
+        self.practice: PracticeSession | None = None
+        self.last_practice: dict | None = None
+        self.history_path = data.with_name("practice.json")
+
         # Training state.
         self.training = False
         self.last_result: dict | None = None
@@ -96,9 +102,11 @@ class Engine:
         self.thumb_dir = data.with_name("thumbs")
         self.gestures: list[str] = self._load_gestures()
 
-        X, y = load_samples(self.data_path)
+        X, y, groups = load_samples(self.data_path)
         self.X: list[np.ndarray] = list(X)
         self.y: list[str] = list(y)
+        self.groups: list[int] = list(groups)
+        self._next_group = (max(self.groups) + 1) if self.groups else 0
 
         self.model = None
         self.classes: list[str] = []
@@ -182,11 +190,12 @@ class Engine:
             keep = [i for i, label in enumerate(self.y) if label != name]
             self.X = [self.X[i] for i in keep]
             self.y = [self.y[i] for i in keep]
+            self.groups = [self.groups[i] for i in keep]
             self._bursts = [b for b in self._bursts if b[0] != name]
             self.thumb_path(name).unlink(missing_ok=True)
             self._save_gestures()
             if self.X:
-                save_samples(self.data_path, np.stack(self.X), self.y)
+                save_samples(self.data_path, np.stack(self.X), self.y, self.groups)
             elif self.data_path.exists():
                 self.data_path.unlink()
 
@@ -271,7 +280,9 @@ class Engine:
                             probs = self.model.predict_proba(hit.features[None, :])[0]
                             k = int(probs.argmax())
                             letter, conf = self.classes[k], float(probs[k])
-                            self.deb.update(letter, conf)
+                            committed = self.deb.update(letter, conf)
+                            if committed is not None:
+                                self._score(committed)
                     elif self.model is not None and self.recording is None:
                         self.deb.update(NO_HAND, 0.0)
 
@@ -306,12 +317,100 @@ class Engine:
         with self._lock:
             self.X.append(feats)
             self.y.append(self.recording)
+            self.groups.append(self._group_id)
             self.remaining -= 1
             if self.remaining <= 0:
                 label, done = self.recording, self._burst_size
                 self._bursts.append((label, done))
                 self.recording = None
-                save_samples(self.data_path, np.stack(self.X), self.y)
+                save_samples(self.data_path, np.stack(self.X), self.y, self.groups)
+
+    # -- practice ----------------------------------------------------------
+
+    def _score(self, committed: str) -> None:
+        """Feed a committed letter to the running practice session, if any."""
+        session = self.practice
+        if session is None or session.done:
+            return
+        session.observe(committed)
+        if session.done:
+            self._finish_practice()
+
+    def start_practice(self, word: str) -> None:
+        if self.model is None:
+            raise ValueError("Train a model before practising.")
+        session = PracticeSession(word)
+        # Practising a letter the model has never seen would score the user on
+        # something the system cannot possibly get right.
+        unknown = sorted({c for c in session.target if c != " "} - set(self.classes))
+        if unknown:
+            raise ValueError(
+                "Not trained on: " + ", ".join(unknown) + ". Record those first."
+            )
+        if " " in session.target and SPACE not in self.classes:
+            raise ValueError("Record a 'space' sign before practising phrases.")
+        with self._lock:
+            self.practice = session
+            self.last_practice = None
+            self.deb.reset()
+
+    def stop_practice(self) -> None:
+        with self._lock:
+            if self.practice is not None:
+                self.last_practice = self.practice.summary()
+                self._append_history(self.last_practice)
+            self.practice = None
+
+    def skip_letter(self) -> None:
+        with self._lock:
+            if self.practice is None:
+                raise ValueError("No practice run in progress.")
+            self.practice.skip()
+            if self.practice.done:
+                self._finish_practice_locked()
+
+    def _finish_practice(self) -> None:
+        with self._lock:
+            self._finish_practice_locked()
+
+    def _finish_practice_locked(self) -> None:
+        if self.practice is None:
+            return
+        self.last_practice = self.practice.summary()
+        self._append_history(self.last_practice)
+        self.practice = None
+
+    def _append_history(self, summary: dict) -> None:
+        """Keep a rolling log of runs, so results survive a restart.
+
+        This is the file to point at in a writeup: it is a record of real
+        attempts rather than a number printed once and lost.
+        """
+        record = {
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "target": summary["target"],
+            "done": summary["done"],
+            "first_try_rate": round(summary["first_try_rate"], 3),
+            "accuracy": round(summary["accuracy"], 3),
+            "seconds": summary["seconds"],
+            "seconds_per_letter": summary["seconds_per_letter"],
+            "confusions": summary["confusions"],
+        }
+        try:
+            history = json.loads(self.history_path.read_text()) \
+                if self.history_path.exists() else []
+        except (ValueError, OSError):
+            history = []
+        history.append(record)
+        self.history_path.parent.mkdir(parents=True, exist_ok=True)
+        self.history_path.write_text(json.dumps(history[-100:], indent=1))
+
+    def history(self) -> list[dict]:
+        try:
+            return json.loads(self.history_path.read_text()) \
+                if self.history_path.exists() else []
+        except (ValueError, OSError):
+            return []
 
     def _annotate(self, frame: np.ndarray, letter: str, conf: float) -> None:
         """Draw the whole interface into the frame.
@@ -341,6 +440,16 @@ class Engine:
         elif self.training:
             cv2.putText(frame, "training...", (14, 32), font, 0.9,
                         (80, 200, 255), 2)
+        elif self.practice is not None:
+            done, cur = self.practice.typed(), self.practice.current or ""
+            cv2.putText(frame, done, (14, 33), font, 0.95, (120, 240, 120), 2)
+            (dw, _), _ = cv2.getTextSize(done, font, 0.95, 2)
+            cv2.putText(frame, cur, (14 + dw, 33), font, 0.95, (80, 200, 255), 2)
+            (cw, _), _ = cv2.getTextSize(cur, font, 0.95, 2)
+            rest = self.practice.target[len(done) + len(cur):]
+            cv2.putText(frame, rest, (14 + dw + cw, 33), font, 0.95, (130, 130, 126), 2)
+            cv2.putText(frame, f"{self.practice.elapsed:4.1f}s", (w - 96, 30),
+                        font, 0.6, (150, 150, 145), 1)
         else:
             shown = self.deb.text[-30:] or "..."
             cv2.putText(frame, shown, (14, 33), font, 0.95, (255, 255, 255), 2)
@@ -387,6 +496,10 @@ class Engine:
             raise ValueError(f"{label!r} is not a letter this model can learn.")
         with self._lock:
             self._burst_size = frames
+            # Each burst is its own group, so training can hold out whole
+            # bursts rather than near-duplicate frames from inside one.
+            self._group_id = self._next_group
+            self._next_group += 1
             self.pending = label
             self.countdown_ends = time.time() + self.countdown
             self.error = None
@@ -400,8 +513,9 @@ class Engine:
             n = min(n, len(self.X))
             del self.X[-n:]
             del self.y[-n:]
+            del self.groups[-n:]
             if self.X:
-                save_samples(self.data_path, np.stack(self.X), self.y)
+                save_samples(self.data_path, np.stack(self.X), self.y, self.groups)
             elif self.data_path.exists():
                 self.data_path.unlink()
             return label
@@ -417,7 +531,8 @@ class Engine:
             with self._lock:
                 X = np.stack(self.X) if self.X else np.empty((0, 1))
                 y = list(self.y)
-            result = train_model(X, y, self.models_dir)
+                groups = list(self.groups)
+            result = train_model(X, y, self.models_dir, groups=groups)
             self._load_model()
             with self._lock:
                 self.last_result = result
@@ -467,6 +582,15 @@ class Engine:
                 "hints": {c: describe(c) for c in self.teachable},
                 "recommended": RECOMMENDED_PER_CLASS,
                 "result": self.last_result,
+                "practice": ({
+                    "target": self.practice.target,
+                    "typed": self.practice.typed(),
+                    "current": self.practice.current,
+                    "hint": describe(self.practice.current or ""),
+                    "elapsed": round(self.practice.elapsed, 1),
+                    "summary": self.practice.summary(),
+                } if self.practice is not None else None),
+                "last_practice": self.last_practice,
             }
 
 
@@ -550,6 +674,36 @@ def gesture_remove():
     except (TypeError, ValueError) as exc:
         return _bad(exc)
     return _ok()
+
+
+@app.route("/api/practice/start", methods=["POST"])
+def practice_start():
+    body = request.get_json(silent=True) or {}
+    try:
+        engine.start_practice(str(body.get("word", "")))
+    except (TypeError, ValueError) as exc:
+        return _bad(exc)
+    return _ok()
+
+
+@app.route("/api/practice/stop", methods=["POST"])
+def practice_stop():
+    engine.stop_practice()
+    return _ok()
+
+
+@app.route("/api/practice/skip", methods=["POST"])
+def practice_skip():
+    try:
+        engine.skip_letter()
+    except (TypeError, ValueError) as exc:
+        return _bad(exc)
+    return _ok()
+
+
+@app.route("/api/practice/history")
+def practice_history():
+    return jsonify(engine.history())
 
 
 @app.route("/api/undo", methods=["POST"])
