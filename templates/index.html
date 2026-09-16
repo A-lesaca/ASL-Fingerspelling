@@ -5,81 +5,89 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASL Live Transcription</title>
 <style>
-  :root { --paper:#f3f0e7; --panel:#fbfaf6; --rule:#ddd8c8; --ink:#1c1a16;
-          --muted:#6d6961; --green:#4a7c4e; --warn:#9c4221; }
+    :root { --paper:#e9eee9; --panel:#fbfaf4; --ink:#172322; --muted:#62716d;
+      --rule:#cbd7d0; --teal:#176b68; --teal-dark:#0d4546; --coral:#d96d50;
+      --yellow:#f2c765; --blue:#e3f0ef; --shadow:0 18px 50px rgba(23,35,34,.10); }
   * { box-sizing: border-box; }
   body {
-    margin:0; padding:24px 20px 40px; background:var(--paper); color:var(--ink);
-    font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin:0; padding:34px 20px 64px; background:var(--paper); color:var(--ink);
+    font:15px/1.5 "Avenir Next", Avenir, "Segoe UI", sans-serif;
+    background-image:radial-gradient(rgba(23,35,34,.08) .7px, transparent .7px);
+    background-size:14px 14px;
   }
-  main { max-width: 940px; margin: 0 auto; }
-  h1 { font-family:Georgia,serif; font-size:24px; margin:0 0 16px; }
-  h2 { font-family:Georgia,serif; font-size:15px; margin:0 0 10px; }
-  .stage { background:#16150f; border-radius:3px; aspect-ratio:4/3; display:grid;
-           place-items:center; overflow:hidden; }
+  main { max-width:1020px; margin:0 auto; }
+  h1 { position:relative; font-family:"Iowan Old Style", Georgia, serif; font-size:clamp(30px, 5vw, 48px);
+       line-height:1; letter-spacing:0; margin:0 0 22px; color:var(--teal-dark); }
+  h1::before { content:"LIVE PRACTICE / ASL"; display:block; margin-bottom:9px; font:700 11px/1 "Avenir Next", Avenir, sans-serif;
+               letter-spacing:.14em; color:var(--coral); }
+  h2 { font-family:"Iowan Old Style", Georgia, serif; font-size:19px; line-height:1.15; margin:0 0 10px; color:var(--teal-dark); }
+  .stage { position:relative; background:#102627; border:8px solid var(--teal-dark); border-radius:12px; aspect-ratio:16/10; display:grid;
+           place-items:center; overflow:hidden; box-shadow:var(--shadow); }
   .stage img { width:100%; height:100%; object-fit:contain; display:block; }
-  .placeholder { color:#7d7a6e; font-size:14px; }
-  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:3px;
-           padding:14px 16px 16px; margin-top:16px; }
-  #transcript { font-family:Georgia,serif; font-size:22px; min-height:1.6em;
+  .placeholder { color:#a8c2bc; font-size:14px; letter-spacing:.02em; }
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:12px;
+           padding:24px; margin-top:18px; box-shadow:var(--shadow); }
+  #transcript { font-family:"Iowan Old Style", Georgia, serif; font-size:clamp(25px, 4vw, 36px); min-height:1.45em;
                 white-space:pre-wrap; word-break:break-word; }
-  #transcript:empty::before { content:"Nothing yet — sign at the camera.";
-                              color:var(--muted); font-size:15px; }
-  .actions { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
-  button { font:inherit; padding:7px 14px; background:#eeebe1;
-           border:1px solid #c9c3b2; border-radius:3px; cursor:pointer; color:var(--ink); }
-  button:hover:not(:disabled) { background:#e5e1d4; }
-  button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  .primary { background:#dfe7d8; border-color:#a8ba9c; }
-  .keys { font-size:13px; color:var(--muted); margin-top:12px; line-height:1.9; }
-  .keys b { font-weight:500; color:var(--ink); }
-  .letters { display:grid; grid-template-columns:repeat(13, 1fr); gap:5px; margin-top:8px; }
-  .letters button { padding:6px 2px; font-size:13px; text-align:center;
+  #transcript:empty::before { content:"Nothing yet - sign at the camera."; color:var(--muted); font-size:16px; }
+  .actions { display:flex; gap:9px; margin-top:15px; flex-wrap:wrap; }
+  button { font:600 13px/1.2 "Avenir Next", Avenir, sans-serif; padding:10px 14px; background:#edf1eb;
+           border:1px solid #b9c9c1; border-radius:7px; cursor:pointer; color:var(--ink); transition:transform .15s ease, background .15s ease, border-color .15s ease; }
+  button:hover:not(:disabled) { background:#dbe9e3; border-color:var(--teal); transform:translateY(-1px); }
+  button:focus-visible { outline:3px solid var(--yellow); outline-offset:2px; }
+  button:disabled { opacity:.42; cursor:not-allowed; }
+  .primary { background:var(--teal); border-color:var(--teal); color:#fff; }
+  .primary:hover:not(:disabled) { background:var(--teal-dark); border-color:var(--teal-dark); }
+  .keys { font-size:13px; color:var(--muted); margin-top:12px; line-height:1.7; max-width:680px; }
+  .keys b { font-weight:700; color:var(--ink); }
+  .letters { display:grid; grid-template-columns:repeat(13, 1fr); gap:7px; margin-top:12px; }
+  .letters button { min-height:57px; padding:6px 2px; font-size:13px; text-align:center;
                     display:flex; flex-direction:column; align-items:center; gap:2px; }
   .letters .thumb { width:100%; max-width:52px; aspect-ratio:1; object-fit:cover;
-                    border-radius:2px; display:block; background:#191817; }
+                    border-radius:5px; display:block; background:#193333; }
   .letters .lbl { line-height:1.1; }
   .letters button.wide { grid-column:span 2; }
   .letters button .n { display:block; font-size:10px; color:var(--muted);
                        font-variant-numeric:tabular-nums; }
-  .letters button.ready { background:#dfe7d8; border-color:#a8ba9c; }
-  .letters button.ready .n { color:var(--green); }
-  @media (max-width:640px) { .letters { grid-template-columns:repeat(7,1fr); } }
-  .report { margin-top:14px; padding:12px 14px; border-radius:3px;
-            background:#eef1e8; border:1px solid var(--rule); font-size:13px; }
-  .report h3 { font-family:Georgia,serif; font-size:14px; margin:0 0 6px; }
-  .report .big { font-size:22px; font-family:Georgia,serif; }
+  .letters button.ready { background:#f8e6b4; border-color:var(--yellow); }
+  .letters button.ready .n { color:var(--teal); }
+  @media (max-width:760px) { .letters { grid-template-columns:repeat(7,1fr); } }
+  @media (max-width:520px) { body { padding:22px 12px 40px; } .panel { padding:17px 14px; } .stage { border-width:5px; }
+    .letters { gap:5px; } .letters button { min-height:52px; } .actions button { flex:1 1 auto; } }
+  .report { margin-top:16px; padding:15px 17px; border-radius:8px;
+            background:#edf3ed; border:1px solid var(--rule); font-size:13px; }
+  .report h3 { font-family:"Iowan Old Style", Georgia, serif; font-size:18px; margin:0 0 6px; color:var(--teal-dark); }
+  .report .big { font-size:28px; font-family:"Iowan Old Style", Georgia, serif; color:var(--teal); }
   .report ul { margin:6px 0 0; padding-left:18px; }
-  .report .weak { color:var(--warn); }
+  .report .weak { color:#a64732; }
   .report .caveat { color:var(--muted); margin-top:8px; }
   .calib { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start;
            margin-top:8px; font-size:12px; }
-  .calib svg { background:#fbfaf6; border:1px solid var(--rule); border-radius:3px; }
+  .calib svg { background:#fbfaf6; border:1px solid var(--rule); border-radius:7px; }
   .calib > div { flex:1; min-width:210px; }
-  .practice { margin-top:10px; padding:12px 14px; border-radius:3px;
-              background:#e9eef5; border:1px solid #b9c8dc; }
-  .practice .word { font-family:Georgia,serif; font-size:30px; letter-spacing:.06em; }
-  .practice .word .got { color:var(--green); }
-  .practice .word .cur { color:#1d4f7c; border-bottom:3px solid #1d4f7c; }
+  .practice { margin-top:12px; padding:16px 17px; border-radius:8px;
+              background:var(--blue); border:1px solid #b8d4d0; }
+  .practice .word { font-family:"Iowan Old Style", Georgia, serif; font-size:32px; letter-spacing:.06em; }
+  .practice .word .got { color:var(--teal); }
+  .practice .word .cur { color:var(--coral); border-bottom:3px solid var(--coral); }
   .practice .word .todo { color:#9aa5b1; }
   .practice .word .sp { opacity:.35; }
-  .practice .now { font-size:13px; color:#3a556f; margin-top:8px; }
+  .practice .now { font-size:13px; color:var(--teal-dark); margin-top:8px; }
   .practice .now b { font-family:Georgia,serif; font-size:15px; }
   table.runs { width:100%; border-collapse:collapse; margin-top:8px; font-size:12px; }
-  table.runs th, table.runs td { text-align:left; padding:3px 6px;
-                                 border-bottom:1px solid #e2ddd0; }
+  table.runs th, table.runs td { text-align:left; padding:5px 6px;
+                                 border-bottom:1px solid #dbe3dc; }
   table.runs th { color:var(--muted); font-weight:500; }
   table.runs td.num { text-align:right; font-variant-numeric:tabular-nums; }
-  .gesture-add { display:flex; gap:8px; margin:8px 0; }
-  .gesture-add input { flex:1; font:inherit; padding:7px 10px; border-radius:3px;
-                       border:1px solid #c9c3b2; background:#fff; color:var(--ink); }
-  .gesture-add input:focus-visible { outline:2px solid var(--green); outline-offset:1px; }
+  .gesture-add { display:flex; gap:9px; margin:10px 0; }
+  .gesture-add input { flex:1; min-width:0; font:inherit; padding:10px 12px; border-radius:7px;
+                       border:1px solid #b9c9c1; background:#fff; color:var(--ink); }
+  .gesture-add input:focus-visible { outline:3px solid var(--yellow); outline-offset:1px; }
   #gestures button { position:relative; }
   #gestures .x { position:absolute; top:1px; right:5px; font-size:13px;
                  color:var(--muted); line-height:1; }
-  .banner { display:none; margin-bottom:14px; padding:9px 13px; border-radius:3px;
-            font-size:14px; background:#f6e3da; border:1px solid #d9b3a2; color:var(--warn); }
+  .banner { display:none; margin-bottom:14px; padding:11px 14px; border-radius:7px;
+            font-size:14px; background:#f8e1d8; border:1px solid #e1b4a4; color:#8c3928; }
 </style>
 </head>
 <body>
@@ -142,7 +150,43 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let lastResult = null, lastPractice = null;
+let lastResult = null, lastPracticeKey = null;
+
+const LETTER_NAMES = {
+  A:"ay", B:"bee", C:"see", D:"dee", E:"ee", F:"eff", G:"gee", H:"aitch",
+  I:"eye", J:"jay", K:"kay", L:"el", M:"em", N:"en", O:"oh", P:"pee",
+  Q:"cue", R:"are", S:"ess", T:"tee", U:"you", V:"vee", W:"double-you",
+  X:"ex", Y:"why", Z:"zee",
+};
+
+function speak(text) {
+  if (!("speechSynthesis" in window)) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.9;
+  window.speechSynthesis.speak(utterance);
+}
+
+let practiceSpeech = { target: null, typedLen: 0 };
+
+function speakPractice(p) {
+  if (!p) {
+    practiceSpeech = { target: null, typedLen: 0 };
+    return;
+  }
+
+  if (p.target !== practiceSpeech.target) {
+    practiceSpeech = { target: p.target, typedLen: 0 };
+    speak(`Spell ${p.target}`);
+    return;                  // let "spell cat" finish before the first letter
+  }
+
+  if (p.typed.length > practiceSpeech.typedLen) {
+    for (const ch of p.typed.slice(practiceSpeech.typedLen)) {
+      speak(ch === " " ? "space" : (LETTER_NAMES[ch] || ch));
+    }
+    practiceSpeech.typedLen = p.typed.length;
+  }
+}
 
 async function post(path, body) {
   try {
@@ -157,7 +201,8 @@ function showError(m) {
 
 function render(s) {
   if (!s) return;
-  $("transcript").textContent = s.text || "";
+  const transcript = s.text || "";
+  $("transcript").textContent = transcript;
   const busyNote = s.pending
       ? `Get ready: ${s.pending} — ${s.countdown.toFixed(0)}s · ${s.hints[s.pending] || ""}`
                  : s.recording ? `Recording ${s.recording} — ${s.remaining} frames left`
@@ -282,6 +327,7 @@ function calibrationBlock(c) {
 
 function renderPractice(s) {
   const live = $("practiceLive"), p = s.practice;
+  speakPractice(p);
   $("skipBtn").hidden = !p;
   $("abandonBtn").hidden = !p;
   $("practiceBtn").hidden = !!p;
@@ -305,8 +351,10 @@ function renderPractice(s) {
   }
 
   const r = s.last_practice;
-  if (r && r !== lastPractice) {
-    lastPractice = r;
+  const practiceKey = r ? JSON.stringify(r) : null;
+  if (r && practiceKey !== lastPracticeKey) {
+    lastPracticeKey = practiceKey;
+    if (r.done) speak(r.target);
     const pct = (v) => Math.round(v * 100) + "%";
     let html = `<h3>Practice result — ${r.target}</h3>`;
     html += `<p><span class="big">${pct(r.first_try_rate)}</span> of letters
