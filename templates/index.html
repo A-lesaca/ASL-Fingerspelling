@@ -46,23 +46,6 @@
   .letters button.ready { background:#dfe7d8; border-color:#a8ba9c; }
   .letters button.ready .n { color:var(--green); }
   @media (max-width:640px) { .letters { grid-template-columns:repeat(7,1fr); } }
-  .reference { margin-top:14px; border:1px solid var(--rule); border-radius:3px;
-               background:#f7f5ee; padding:10px 14px; }
-  .reference summary { font-family:Georgia,serif; font-size:14px; cursor:pointer; }
-  .reference summary:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
-  #reference { display:grid; grid-template-columns:repeat(auto-fill,minmax(88px,1fr));
-               gap:10px; margin-top:12px; }
-  .card { text-align:center; }
-  .card .pic { width:100%; aspect-ratio:1; border-radius:3px; background:#e7e3d8;
-               border:1px solid var(--rule); display:grid; place-items:center;
-               overflow:hidden; }
-  .card .pic img { width:100%; height:100%; object-fit:cover; display:block; }
-  .card .pic span { font-family:Georgia,serif; font-size:26px; color:#b3ad9e; }
-  .card .cap { font-family:Georgia,serif; font-size:14px; margin-top:3px; }
-  .card .cap small { display:block; font-family:inherit; font-size:10px;
-                     color:var(--muted); font-variant-numeric:tabular-nums; }
-  .refnote { font-size:12px; color:var(--muted); margin:10px 0 0; }
-  .refnote a { color:var(--green); }
   .report { margin-top:14px; padding:12px 14px; border-radius:3px;
             background:#eef1e8; border:1px solid var(--rule); font-size:13px; }
   .report h3 { font-family:Georgia,serif; font-size:14px; margin:0 0 6px; }
@@ -70,6 +53,24 @@
   .report ul { margin:6px 0 0; padding-left:18px; }
   .report .weak { color:var(--warn); }
   .report .caveat { color:var(--muted); margin-top:8px; }
+  .calib { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start;
+           margin-top:8px; font-size:12px; }
+  .calib svg { background:#fbfaf6; border:1px solid var(--rule); border-radius:3px; }
+  .calib > div { flex:1; min-width:210px; }
+  .practice { margin-top:10px; padding:12px 14px; border-radius:3px;
+              background:#e9eef5; border:1px solid #b9c8dc; }
+  .practice .word { font-family:Georgia,serif; font-size:30px; letter-spacing:.06em; }
+  .practice .word .got { color:var(--green); }
+  .practice .word .cur { color:#1d4f7c; border-bottom:3px solid #1d4f7c; }
+  .practice .word .todo { color:#9aa5b1; }
+  .practice .word .sp { opacity:.35; }
+  .practice .now { font-size:13px; color:#3a556f; margin-top:8px; }
+  .practice .now b { font-family:Georgia,serif; font-size:15px; }
+  table.runs { width:100%; border-collapse:collapse; margin-top:8px; font-size:12px; }
+  table.runs th, table.runs td { text-align:left; padding:3px 6px;
+                                 border-bottom:1px solid #e2ddd0; }
+  table.runs th { color:var(--muted); font-weight:500; }
+  table.runs td.num { text-align:right; font-variant-numeric:tabular-nums; }
   .gesture-add { display:flex; gap:8px; margin:8px 0; }
   .gesture-add input { flex:1; font:inherit; padding:7px 10px; border-radius:3px;
                        border:1px solid #c9c3b2; background:#fff; color:var(--ink); }
@@ -103,23 +104,21 @@
       <button id="trainBtn" class="primary">Train model</button>
       <button id="undoBtn" disabled>Undo last recording</button>
     </div>
-    <p class="keys">
-      <b>Any letter</b> records that sign &nbsp; <b>Space</b> and <b>Backspace</b>
-      record those signs &nbsp; <b>Enter</b> trains &nbsp; <b>Esc</b> clears the text.
-      J and Z need motion, so they are left out.
-    </p>
-    <details class="reference">
-      <summary>Fingerspelling reference — your own chart</summary>
-      <p class="refnote" style="margin:8px 0 0">
-        Each square fills in with a photo of your hand the first time you record
-        that sign, so this chart shows the exact poses the model was trained on.
-        <b>J</b> and <b>Z</b> are drawn with movement, which a single-frame
-        classifier cannot represent, so they are left out.
-      </p>
-      <div id="reference"></div>
-    </details>
-
     <div id="report" class="report" hidden></div>
+
+    <h2 style="margin-top:18px">Practice</h2>
+    <p class="keys" style="margin-top:0">
+      Spell a target word and get scored on it — how many letters you got
+      first time, how long each took, and which ones came out wrong.
+    </p>
+    <div class="gesture-add">
+      <input id="practiceWord" type="text" maxlength="24" placeholder="e.g. CAT">
+      <button id="practiceBtn" class="primary">Start practice</button>
+      <button id="skipBtn" hidden>Skip letter</button>
+      <button id="abandonBtn" hidden>Stop</button>
+    </div>
+    <div id="practiceLive" class="practice" hidden></div>
+    <div id="practiceResult" class="report" hidden></div>
 
     <h2 style="margin-top:18px">Teach a letter</h2>
     <p class="keys" style="margin-top:0">
@@ -143,7 +142,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let lastResult = null;
+let lastResult = null, lastPractice = null;
 
 async function post(path, body) {
   try {
@@ -170,29 +169,12 @@ function render(s) {
   $("trainBtn").textContent = s.training ? "Training…" : "Train model";
   showError(s.error);
 
-  // Rebuild only when the set of captured photos changes, so the panel is not
-  // re-rendered four times a second while polling.
-  const chartKey = s.thumbs.join("|") + "#" + s.gestures.join("|");
-  if ($("reference").dataset.key !== chartKey && s.hints) {
-    $("reference").dataset.key = chartKey;
-    $("reference").innerHTML = Object.keys(s.hints).map(k => {
-      const shot = s.thumbs.includes(k);
-      const n = s.counts[k] || 0;
-      // The description is the same text the countdown shows, so the chart and
-      // the in-the-moment prompt cannot drift apart.
-      return `<div class="card" title="${(s.hints[k] || "").replace(/"/g, "&quot;")}">
-        <div class="pic">${shot
-          ? `<img src="/thumb/${encodeURIComponent(k)}?v=${n}" alt="Your ${k} sign">`
-          : `<span>${k.length > 1 ? "·" : k}</span>`}</div>
-        <div class="cap">${k}<small>${n ? n + " samples" : "not recorded"}</small></div>
-      </div>`;
-    }).join("");
-  }
   const builtIn = Object.keys(s.counts).filter(k => !s.gestures.includes(k));
   paint($("letters"), builtIn, s, false);
   paint($("gestures"), s.gestures, s, true);
 
   if (s.result && s.result !== lastResult) { lastResult = s.result; report(s.result); }
+  renderPractice(s);
 
   const feed = $("feed");
   if (s.running && feed.hidden) {
@@ -237,7 +219,129 @@ function report(r) {
     html += `<p>Most confused:</p><ul>` + r.confusions.map(([a, b, n]) =>
       `<li><b>${a}</b> read as <b>${b}</b> (${n}×)</li>`).join("") + `</ul>`;
   }
+  if (r.calibration) html += calibrationBlock(r.calibration);
   box.innerHTML = html;
+}
+
+function calibrationBlock(c) {
+  // Reliability diagram: confidence on x, measured accuracy on y. A perfectly
+  // calibrated model sits on the diagonal. Bars below it claimed more
+  // certainty than they earned.
+  const W = 250, P = 34, S = W - P - 12;
+  const x = (v) => P + v * S, y = (v) => W - P - v * S;
+
+  const bars = c.bins.filter(b => b.count).map(b => {
+    const bw = Math.max((b.high - b.low) * S - 3, 2);
+    const h = Math.max((b.accuracy) * S, 1);
+    const over = b.accuracy < b.confidence;
+    return `<rect x="${x(b.low) + 1.5}" y="${y(b.accuracy)}" width="${bw}"
+      height="${h}" fill="${over ? "#c98a70" : "#7fa07a"}" opacity="0.85"
+      rx="1"><title>${Math.round(b.low * 100)}–${Math.round(b.high * 100)}%
+      confidence: ${Math.round(b.accuracy * 100)}% correct over ${b.count} frames</title></rect>`;
+  }).join("");
+
+  const ticks = [0, 0.5, 1].map(v =>
+    `<text x="${x(v)}" y="${W - P + 15}" font-size="9" text-anchor="middle"
+       fill="#6d6961">${v}</text>
+     <text x="${P - 6}" y="${y(v) + 3}" font-size="9" text-anchor="end"
+       fill="#6d6961">${v}</text>`).join("");
+
+  const rows = c.thresholds.map(t =>
+    `<tr><td class="num">${t.threshold.toFixed(2)}</td>
+     <td class="num">${Math.round(t.coverage * 100)}%</td>
+     <td class="num">${t.kept ? Math.round(t.accuracy * 100) + "%" : "—"}</td></tr>`).join("");
+
+  return `<h3 style="margin-top:14px">Confidence calibration</h3>
+    <p>The model is <b>${c.verdict}</b>. It says ${Math.round(c.mean_confidence * 100)}%
+       on average and is right ${Math.round(c.accuracy * 100)}% of the time
+       (ECE ${c.ece}, worst bin ${c.mce}, Brier ${c.brier}).</p>
+    <div class="calib">
+      <svg viewBox="0 0 ${W} ${W}" width="${W}" height="${W}" role="img"
+           aria-label="Reliability diagram: measured accuracy against stated confidence">
+        <line x1="${P}" y1="${W - P}" x2="${x(1)}" y2="${y(1)}"
+              stroke="#9a9488" stroke-width="1" stroke-dasharray="3 3"/>
+        ${bars}
+        <line x1="${P}" y1="${W - P}" x2="${x(1)}" y2="${W - P}" stroke="#b4ac9c"/>
+        <line x1="${P}" y1="${W - P}" x2="${P}" y2="${y(1)}" stroke="#b4ac9c"/>
+        ${ticks}
+        <text x="${x(0.5)}" y="${W - 4}" font-size="10" text-anchor="middle"
+              fill="#6d6961">stated confidence</text>
+        <text x="11" y="${y(0.5)}" font-size="10" text-anchor="middle"
+              fill="#6d6961" transform="rotate(-90 11 ${y(0.5)})">actual accuracy</text>
+      </svg>
+      <div>
+        <p style="margin:0 0 6px">Dashed line is perfect honesty. Bars below it
+           are over-confident, above it under-confident.</p>
+        <table class="runs"><tr><th>Cutoff</th><th>Frames kept</th><th>Correct</th></tr>
+        ${rows}</table>
+        <p class="caveat">This is what your confidence threshold buys. Raising it
+           discards more frames but keeps better ones.</p>
+      </div>
+    </div>`;
+}
+
+function renderPractice(s) {
+  const live = $("practiceLive"), p = s.practice;
+  $("skipBtn").hidden = !p;
+  $("abandonBtn").hidden = !p;
+  $("practiceBtn").hidden = !!p;
+  $("practiceWord").disabled = !!p;
+  live.hidden = !p;
+
+  if (p) {
+    $("practiceResult").hidden = true;
+    const glyph = (ch, cls) =>
+      `<span class="${cls}${ch === " " ? " sp" : ""}">${ch === " " ? "␣" : ch}</span>`;
+    const typed = p.typed, cur = p.current || "";
+    const rest = p.target.slice(typed.length + cur.length);
+    live.innerHTML =
+      `<div class="word">` +
+      [...typed].map(c => glyph(c, "got")).join("") +
+      (cur ? glyph(cur, "cur") : "") +
+      [...rest].map(c => glyph(c, "todo")).join("") +
+      `</div><div class="now">` +
+      (cur ? `Sign <b>${cur === " " ? "space" : cur}</b> — ${p.hint}` : "Finished.") +
+      ` · ${p.elapsed.toFixed(1)}s</div>`;
+  }
+
+  const r = s.last_practice;
+  if (r && r !== lastPractice) {
+    lastPractice = r;
+    const pct = (v) => Math.round(v * 100) + "%";
+    let html = `<h3>Practice result — ${r.target}</h3>`;
+    html += `<p><span class="big">${pct(r.first_try_rate)}</span> of letters
+      right first time · ${r.seconds}s total · ${r.seconds_per_letter}s per letter
+      · ${r.attempts} attempts for ${r.completed} letters</p>`;
+    const missed = r.detail.filter(d => d.wrong.length || d.skipped);
+    if (missed.length) {
+      html += `<p>Where it went wrong:</p><ul>` + missed.map(d =>
+        `<li><b>${d.target === " " ? "space" : d.target}</b> — ` +
+        (d.skipped ? "skipped" : `read as ${d.wrong.join(", ")}`) +
+        ` (${d.attempts} attempt${d.attempts === 1 ? "" : "s"}, ${d.seconds}s)</li>`
+      ).join("") + `</ul>`;
+    } else {
+      html += `<p>Clean run — every letter first time.</p>`;
+    }
+    $("practiceResult").innerHTML = html + `<div id="runs"></div>`;
+    $("practiceResult").hidden = false;
+    loadHistory();
+  }
+}
+
+async function loadHistory() {
+  try {
+    const rows = await (await fetch("/api/practice/history")).json();
+    if (!rows.length || !$("runs")) return;
+    const recent = rows.slice(-8).reverse();
+    $("runs").innerHTML =
+      `<p style="margin-top:10px">Recent runs (saved to data/practice.json):</p>` +
+      `<table class="runs"><tr><th>When</th><th>Word</th><th>First try</th>` +
+      `<th>Per letter</th><th>Total</th></tr>` +
+      recent.map(r => `<tr><td>${r.at.slice(5, 16)}</td><td>${r.target}</td>` +
+        `<td class="num">${Math.round(r.first_try_rate * 100)}%</td>` +
+        `<td class="num">${r.seconds_per_letter}s</td>` +
+        `<td class="num">${r.seconds}s</td></tr>`).join("") + `</table>`;
+  } catch (e) { /* history is optional */ }
 }
 
 function paint(host, labels, s, removable) {
@@ -275,6 +379,15 @@ function paint(host, labels, s, removable) {
     }
   });
 }
+
+$("practiceBtn").onclick = () => post("/api/practice/start",
+  {word: $("practiceWord").value});
+$("skipBtn").onclick = () => post("/api/practice/skip");
+$("abandonBtn").onclick = () => post("/api/practice/stop");
+$("practiceWord").addEventListener("keydown", (e) => {
+  e.stopPropagation();                    // typing here must not record letters
+  if (e.key === "Enter") { e.preventDefault(); $("practiceBtn").click(); }
+});
 
 $("addGesture").onclick = async () => {
   const name = $("gestureName").value.trim();

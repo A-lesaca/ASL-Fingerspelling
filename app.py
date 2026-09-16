@@ -42,7 +42,11 @@ from training import (RECOMMENDED_PER_CLASS, counts, load_samples,
 # represent, so they are left out of the alphabet everywhere.
 MOTION_LETTERS = {"J", "Z"}
 ALPHABET = [c for c in string.ascii_uppercase if c not in MOTION_LETTERS]
-BUILT_IN = ALPHABET + [SPACE, DELETE]
+# Letters only. Space and delete are handled by the buttons under the
+# transcript, which edit the text directly -- they do not need a handshape,
+# and asking the user to invent two arbitrary poses for them cost more than
+# it gave.
+BUILT_IN = list(ALPHABET)
 
 # Custom gestures are ordinary labels: the classifier has no idea whether a
 # label is a letter or a word, so a whole-word sign trains exactly like "A".
