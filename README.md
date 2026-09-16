@@ -1,4 +1,4 @@
-# Static Fingerspelling
+# ASL Fingerspelling
 
 A browser-based ASL fingerspelling trainer. Record your own hand signs with a
 webcam, train a classifier on them, then get live letter-by-letter
