@@ -1,19 +1,3 @@
-"""ASL fingerspelling: record, train and transcribe, all in the browser.
-
-This is the whole project. Run it and open the page:
-
-    python app.py
-
-The camera runs on a background thread; frames are classified, smoothed into
-letters and streamed to the browser as MJPEG. The same page records training
-samples and fits the model, so there are no separate collection or training
-scripts to run first.
-
-Reading the camera off the main thread is deliberate on macOS: an OpenCV
-window must live on the main thread and tends to hang when it does not.
-Serving frames to a browser avoids the native GUI entirely.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -42,17 +26,11 @@ from training import (RECOMMENDED_PER_CLASS, counts, load_samples,
 # represent, so they are left out of the alphabet everywhere.
 MOTION_LETTERS = {"J", "Z"}
 ALPHABET = [c for c in string.ascii_uppercase if c not in MOTION_LETTERS]
-# Letters only. Space and delete are handled by the buttons under the
-# transcript, which edit the text directly -- they do not need a handshape,
-# and asking the user to invent two arbitrary poses for them cost more than
-# it gave.
+
 BUILT_IN = list(ALPHABET)
 
-# Custom gestures are ordinary labels: the classifier has no idea whether a
-# label is a letter or a word, so a whole-word sign trains exactly like "A".
-# The one real limit is motion -- a sign defined by movement (YES, THANK YOU
-# as actually signed) cannot be told apart from its own still frames, which is
-# the same reason J and Z are left out.
+# Custom gestures are ordinary labels
+
 GESTURE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
 
 app = Flask(__name__)
@@ -84,8 +62,6 @@ class Engine:
                                    min_confidence=confidence)
 
         # Recording state. `pending` is a letter waiting out its countdown:
-        # you cannot hold a sign and reach the keyboard at the same time with
-        # one hand, so the key press only schedules the burst.
         self.recording: str | None = None
         self.remaining = 0
         self.pending: str | None = None
@@ -125,12 +101,6 @@ class Engine:
         return self.thumb_dir / f"{self.thumb_name(label)}.jpg"
 
     def _save_thumb(self, frame: np.ndarray, raw: list, label: str) -> None:
-        """Crop the hand out of one frame and keep it as the label's picture.
-
-        Taken from the user's own recording rather than shipped as artwork:
-        it is guaranteed to match the pose the model was actually trained on,
-        which a generic alphabet chart cannot promise.
-        """
         h, w = frame.shape[:2]
         xs = [lm.x * w for lm in raw]
         ys = [lm.y * h for lm in raw]
@@ -158,7 +128,7 @@ class Engine:
             raw = json.loads(self.gestures_path.read_text())
             return [str(g) for g in raw if isinstance(g, str)]
         except (ValueError, OSError):
-            return []   # a corrupt list should not stop the app starting
+            return []  
 
     def _save_gestures(self) -> None:
         self.gestures_path.parent.mkdir(parents=True, exist_ok=True)
@@ -190,7 +160,6 @@ class Engine:
             if name not in self.gestures:
                 raise ValueError(f"No gesture called {name}.")
             self.gestures.remove(name)
-            # Drop its samples too, or training would still see the label.
             keep = [i for i, label in enumerate(self.y) if label != name]
             self.X = [self.X[i] for i in keep]
             self.y = [self.y[i] for i in keep]
@@ -208,8 +177,6 @@ class Engine:
         if path.exists():
             self.model = joblib.load(path)
             self.classes = [str(c) for c in self.model.classes_]
-
-    # -- lifecycle ---------------------------------------------------------
 
     @property
     def running(self) -> bool:
@@ -235,8 +202,6 @@ class Engine:
             self.status = "Stopped"
             self.letter, self.confidence, self.fps = "-", 0.0, 0.0
             self.recording, self.remaining, self.pending = None, 0, None
-
-    # -- camera thread -----------------------------------------------------
 
     def _loop(self) -> None:
         cap = cv2.VideoCapture(self.camera_index)
@@ -277,8 +242,6 @@ class Engine:
                             first = self.remaining == self._burst_size
                             self._capture(hit.features)
                             if first:
-                                # Use the un-annotated frame: the overlay bands
-                                # are drawn later, so the crop stays clean.
                                 self._save_thumb(frame, hit.raw, label)
                         elif self.model is not None:
                             probs = self.model.predict_proba(hit.features[None, :])[0]
@@ -329,8 +292,6 @@ class Engine:
                 self.recording = None
                 save_samples(self.data_path, np.stack(self.X), self.y, self.groups)
 
-    # -- practice ----------------------------------------------------------
-
     def _score(self, committed: str) -> None:
         """Feed a committed letter to the running practice session, if any."""
         session = self.practice
@@ -344,8 +305,6 @@ class Engine:
         if self.model is None:
             raise ValueError("Train a model before practising.")
         session = PracticeSession(word)
-        # Practising a letter the model has never seen would score the user on
-        # something the system cannot possibly get right.
         unknown = sorted({c for c in session.target if c != " "} - set(self.classes))
         if unknown:
             raise ValueError(
@@ -387,8 +346,7 @@ class Engine:
     def _append_history(self, summary: dict) -> None:
         """Keep a rolling log of runs, so results survive a restart.
 
-        This is the file to point at in a writeup: it is a record of real
-        attempts rather than a number printed once and lost.
+        The page can show the last 100 runs, and the user can download them.
         """
         record = {
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -419,9 +377,9 @@ class Engine:
     def _annotate(self, frame: np.ndarray, letter: str, conf: float) -> None:
         """Draw the whole interface into the frame.
 
-        Everything the demo needs to show lives here rather than in the page,
-        so the browser only has to display one image. Coordinates are derived
-        from the frame size so this survives a different camera resolution.
+        The top band shows what has been typed so far, or the recording countdown.
+        The bottom left shows the current letter, with the vote progress beneath it.
+        The bottom right shows what the keys do.
         """
         h, w = frame.shape[:2]
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -491,8 +449,6 @@ class Engine:
             cv2.putText(frame, line, (w - tw - 14, y), font, 0.5,
                         (170, 170, 164), 1)
 
-    # -- recording and training -------------------------------------------
-
     def record(self, label: str, frames: int) -> None:
         if not self.running:
             raise ValueError("Start the camera before recording.")
@@ -500,8 +456,6 @@ class Engine:
             raise ValueError(f"{label!r} is not a letter this model can learn.")
         with self._lock:
             self._burst_size = frames
-            # Each burst is its own group, so training can hold out whole
-            # bursts rather than near-duplicate frames from inside one.
             self._group_id = self._next_group
             self._next_group += 1
             self.pending = label
@@ -541,14 +495,12 @@ class Engine:
             with self._lock:
                 self.last_result = result
                 self.error = None
-        except Exception as exc:  # surfaced in the page, not the console
+        except Exception as exc:  
             with self._lock:
                 self.last_result = None
                 self.error = f"Training failed: {exc}"
         finally:
             self.training = False
-
-    # -- readers -----------------------------------------------------------
 
     def frames_stream(self):
         boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
@@ -630,9 +582,6 @@ def _ok():
 
 
 def _bad(exc: Exception):
-    # Store it on the engine, not just in this response. The page polls every
-    # 250ms, so an error returned only here would be wiped almost immediately
-    # and the user would see nothing at all.
     engine.error = str(exc)
     return jsonify({**engine.snapshot(), "error": str(exc)}), 400
 
