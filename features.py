@@ -7,7 +7,7 @@ WRIST = 0
 MIDDLE_MCP = 9  # knuckle of the middle finger
 
 NUM_LANDMARKS = 21
-FEATURE_DIM = NUM_LANDMARKS * 3  # 63
+FEATURE_DIM = NUM_LANDMARKS * 3  
 
 _EPS = 1e-8
 
@@ -66,18 +66,6 @@ def landmarks_to_array(hand_landmarks) -> np.ndarray:
         raise ValueError(f"expected {NUM_LANDMARKS} landmarks, got {arr.shape}")
     return arr
 
-# ---------------------------------------------------------------------------
-# Geometric feature extraction
-# ---------------------------------------------------------------------------
-# The normalised coordinates above are already invariant to where the hand is,
-# how big it looks and how the wrist is tilted. What they do NOT make explicit
-# is the thing that actually separates letters: which fingers are folded, how
-# far apart the fingertips are, and how bent each joint is. A classifier can in
-# principle infer all of that from raw coordinates, but stating it directly
-# gives a small model far less to learn -- which matters when the dataset is a
-# few thousand hand-labelled frames rather than a few million.
-
-# Landmark chains, wrist-first, for each digit.
 FINGER_CHAINS = {
     "thumb": (0, 1, 2, 3, 4),
     "index": (0, 5, 6, 7, 8),

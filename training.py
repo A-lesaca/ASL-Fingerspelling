@@ -59,15 +59,6 @@ def counts(y: list[str]) -> dict[str, int]:
 
 
 def _split(X, y_arr, groups, seed):
-    """Hold out whole bursts where possible, individual frames otherwise.
-
-    A burst is one key press: thirty frames of the same hand barely moving, so
-    they are near-duplicates. Splitting those at random puts copies of the same
-    moment on both sides, and the reported accuracy then measures memorisation
-    rather than recognition -- comfortably over-optimistic. Holding out whole
-    bursts gives a number that means something, but it needs at least two
-    bursts of every letter.
-    """
     per_class_groups = {}
     for label, g in zip(y_arr, groups):
         per_class_groups.setdefault(label, set()).add(g)

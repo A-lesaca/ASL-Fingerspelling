@@ -1,11 +1,3 @@
-"""Scoring for practice runs: spell a target word, measure how it went.
-
-Kept separate from the camera and the web server so the scoring rules can be
-tested directly. The session is fed committed letters -- the output of the
-debouncer, not raw per-frame predictions -- so one entry here corresponds to
-one letter the user actually produced.
-"""
-
 from __future__ import annotations
 
 import time
@@ -64,8 +56,6 @@ class PracticeSession:
         self.finished_at: Optional[float] = None
         self.results: list[LetterResult] = [LetterResult(c) for c in cleaned]
 
-    # -- state -------------------------------------------------------------
-
     @property
     def done(self) -> bool:
         return self._index >= len(self.target)
@@ -88,8 +78,6 @@ class PracticeSession:
     def typed(self) -> str:
         """What the user has completed so far."""
         return self.target[: self._index]
-
-    # -- input -------------------------------------------------------------
 
     def observe(self, label: str) -> str:
         """Feed one committed letter. Returns 'correct', 'wrong' or 'ignored'."""
@@ -121,16 +109,11 @@ class PracticeSession:
         if self.done:
             self.finished_at = self._clock()
 
-    # -- output ------------------------------------------------------------
-
     def summary(self) -> dict:
         completed = [r for r in self.results if r.attempts or r.skipped]
         scored = [r for r in completed if not r.skipped]
         first_try = sum(1 for r in completed if r.first_try)
 
-        # Which handshape was mistaken for which. This is the measurement worth
-        # reporting: it is taken live, from the user's own signing, rather than
-        # from a held-out split of the training data.
         confusions: dict[tuple[str, str], int] = {}
         for r in self.results:
             for got in r.wrong:
