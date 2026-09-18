@@ -1,17 +1,3 @@
-"""MediaPipe hand detection, configured in exactly one place.
-
-Uses the MediaPipe **Tasks** API. The older `mp.solutions.hands` interface that
-most online tutorials still show was deprecated in 2023 and has since been
-removed from the package entirely -- on current versions it raises
-``AttributeError: module 'mediapipe' has no attribute 'solutions'``.
-
-Every script imports this rather than configuring MediaPipe itself. The reason
-is train/serve skew: if the data-collection script and the live demo disagree
-about detection confidence or mirroring, the model is evaluated on a subtly
-different distribution from the one it meets at inference, and the failure is
-silent.
-"""
-
 from __future__ import annotations
 
 import urllib.request
@@ -39,9 +25,9 @@ CONNECTIONS = [
 
 
 class Detection(NamedTuple):
-    features: np.ndarray  # (VECTOR_DIM,) geometric features, right-hand canonical
-    handedness: str  # the user's true hand: "Left" or "Right"
-    raw: list  # the 21 NormalizedLandmarks, kept for drawing
+    features: np.ndarray 
+    handedness: str  
+    raw: list  
 
 
 def ensure_model(path: Path = MODEL_FILE) -> Path:
@@ -52,7 +38,7 @@ def ensure_model(path: Path = MODEL_FILE) -> Path:
     tmp = path.with_suffix(path.suffix + ".part")
     try:
         urllib.request.urlretrieve(MODEL_URL, tmp)
-        tmp.replace(path)  # only becomes the real file once it's complete
+        tmp.replace(path) 
     finally:
         tmp.unlink(missing_ok=True)
     return path
@@ -107,18 +93,7 @@ class HandDetector:
         frame_is_mirrored: bool,
         timestamp_ms: Optional[int] = None,
     ) -> Optional[Detection]:
-        """Detect one hand and return its feature vector, or None.
-
-        Args:
-            rgb_frame: HxWx3 RGB image (OpenCV gives BGR -- convert first).
-            frame_is_mirrored: True if the frame was flipped for selfie view.
-            timestamp_ms: presentation time of this frame. Pass the real value
-                when reading a file -- MediaPipe's tracker uses the gap between
-                timestamps to decide how far the hand may plausibly have moved,
-                so feeding a fake 30fps clock while decoding a 60fps or 24fps
-                video degrades tracking. Defaults to a synthetic 30fps clock,
-                which is right for a live webcam.
-        """
+        #Detect a hand in an RGB frame and return its features, handedness and raw landmarks.
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
         if self._mode == vision.RunningMode.VIDEO:
